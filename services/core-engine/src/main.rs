@@ -1,4 +1,4 @@
-//! ALICE SaaS — Core Engine
+//! ALICE SaaS — Core Engine エントリポイント
 
 use axum::{
     extract::State,
@@ -7,54 +7,31 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc, time::Instant};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use train_engine::{
+    build_health_response, handle_process_request, HealthResponse, ProcessRequest, ProcessResponse,
+    DEFAULT_PORT,
+};
+
+/// アプリケーション共有状態
 #[derive(Clone)]
 struct AppState {
     start_time: Instant,
 }
 
-#[derive(Debug, Serialize)]
-struct HealthResponse {
-    status: String,
-    version: String,
-    uptime_seconds: f64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProcessRequest {
-    data: String,
-    #[serde(default)]
-    options: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-struct ProcessResponse {
-    result: String,
-    latency_ms: f64,
-}
-
+/// ヘルスチェックエンドポイント
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        uptime_seconds: state.start_time.elapsed().as_secs_f64(),
-    })
+    Json(build_health_response(state.start_time.elapsed()))
 }
 
-async fn process(
-    Json(req): Json<ProcessRequest>,
-) -> Result<Json<ProcessResponse>, StatusCode> {
-    let start = Instant::now();
-    // TODO: ALICE crate integration
-    let result = format!("[stub] processed: {}", &req.data[..req.data.len().min(100)]);
-    Ok(Json(ProcessResponse {
-        result,
-        latency_ms: start.elapsed().as_secs_f64() * 1000.0,
-    }))
+/// データ処理エンドポイント
+async fn process(Json(req): Json<ProcessRequest>) -> Result<Json<ProcessResponse>, StatusCode> {
+    handle_process_request(&req)
+        .map(Json)
+        .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 #[tokio::main]
@@ -63,14 +40,16 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
-    let state = Arc::new(AppState { start_time: Instant::now() });
+    let state = Arc::new(AppState {
+        start_time: Instant::now(),
+    });
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/v1/process", post(process))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8081));
+    let addr = SocketAddr::from(([0, 0, 0, 0], DEFAULT_PORT));
     info!("Engine listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
